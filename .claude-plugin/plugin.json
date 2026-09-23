@@ -1,6 +1,6 @@
 {
   "name": "reviewguard",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "description": "Ensures edits to chosen files are reviewed before they are written, so you can run in auto mode while keeping track of changes to important files. Files to review are listed in a .gitignore-style .reviewguard file.",
   "author": {
     "name": "Daniel Qian",
