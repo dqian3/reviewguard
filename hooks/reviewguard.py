@@ -17,10 +17,12 @@ the prompt hook, never from a shell, so the agent cannot change them:
 
 Which files are reviewed is written in rules files that read like .gitignore,
 except that a listed file is one to *review* and `!` exempts it. Three scopes,
-nearest first: session, then project (<project>/.reviewguard), then global
-(~/.reviewguard/rules). Within a file the last matching line wins, as in
-.gitignore. The nearest scope that matches a path decides it, so a repo can
-force review on something the global rules exempt, not just carve exemptions.
+nearest first: session, then project, then global (~/.reviewguard/rules). The
+project scope is every .reviewguard from the edited file's directory up to the
+repo root (or home, or /), nearest first, as .gitignore files stack. Within a
+file the last matching line wins, as in .gitignore. The nearest file that
+matches a path decides it, so a repo can force review on something the global
+rules exempt, not just carve exemptions.
 
 The on/off toggle is separate and per session, like the permission mode. Every
 session starts on.
@@ -46,7 +48,6 @@ SESSION_TTL = 7 * 86400  # session files outlive their session; sweep the strays
 
 DEFAULT_ON = True
 SCOPE_NAMES = {"session": "this session", "project": "this repo", "global": "global"}
-SCOPES = ("session", "project", "global")
 
 
 # --------------------------------------------------------------------------
@@ -72,15 +73,16 @@ def write_file(path, text):
         f.write(text if text.endswith("\n") else text + "\n")
 
 
-def rules_text(scope, root, sid):
-    """(text, path) for one scope."""
-    if scope == "global":
-        return read_file(GLOBAL_RULES), GLOBAL_RULES
-    if scope == "project":
-        path = os.path.join(root, PROJECT_RULES)
-        return read_file(path), path
-    path = session_path(sid) if sid else None
-    return (read_file(path) if path else None), path
+def load_layer(scope, path, base=None):
+    """(layer, toggle) for one rules file; a missing file is an empty layer."""
+    rules, toggle = parse_rules(read_file(path) if path else None, base)
+    return {"scope": scope, "rules": rules, "path": path}, toggle
+
+
+def layer_name(layer):
+    if layer["scope"] == "project":
+        return layer["path"]
+    return SCOPE_NAMES[layer["scope"]]
 
 
 # --------------------------------------------------------------------------
@@ -106,11 +108,16 @@ def translate(pat):
     while i < n:
         c = pat[i]
         if c == "*":
-            if pat[i : i + 3] == "**/":
+            # ** is special only as a whole path segment; otherwise it is *.
+            whole = pat[i : i + 2] == "**" and (i == 0 or pat[i - 1] == "/")
+            if whole and pat[i + 2 : i + 3] == "/":
                 out.append("(?:.*/)?")
                 i += 3
-            elif pat[i : i + 2] == "**":
+            elif whole and i + 2 == n:
                 out.append(".*")
+                i += 2
+            elif pat[i : i + 2] == "**":
+                out.append("[^/]*")
                 i += 2
             else:
                 out.append("[^/]*")
@@ -169,8 +176,10 @@ def compile_rule(pat, base):
         head = "/"
     else:
         head = "(?:.*/)?"
-    # A pattern that names a directory covers everything under it.
-    return re.compile(head + body + "(?:/.*)?$")
+    # A pattern that names a directory covers everything under it; one ending
+    # in / matches only a directory, never a file of that name.
+    tail = "/.*$" if dir_only else "(?:/.*)?$"
+    return re.compile(head + body + tail)
 
 
 def parse_rules(text, base):
@@ -229,6 +238,14 @@ def session_path(sid):
     return os.path.join(SESSION_DIR, "claude-%s" % sid)
 
 
+def touch_session(sid):
+    """Mark a session's file as in use, so the sweep keeps it."""
+    try:
+        os.utime(session_path(sid))
+    except OSError:
+        pass
+
+
 def sweep_sessions():
     cutoff = time.time() - SESSION_TTL
     try:
@@ -240,28 +257,40 @@ def sweep_sessions():
         pass
 
 
+def project_layers(start):
+    """Every .reviewguard from `start` upward, nearest first.
+
+    Stops at the repo root (a directory holding .git), home, or /, whichever
+    comes first. Each file's patterns are relative to its own directory.
+    """
+    layers, d, home = [], os.path.abspath(start), os.path.abspath(HOME)
+    while True:
+        path = os.path.join(d, PROJECT_RULES)
+        if os.path.isfile(path):
+            layers.append(load_layer("project", path, d)[0])
+        parent = os.path.dirname(d)
+        if d == home or parent == d or os.path.exists(os.path.join(d, ".git")):
+            return layers
+        d = parent
+
+
 def settings(root, sid=None):
-    """The three scopes of rules, plus the toggle and what decided it."""
-    layers, session_toggle = [], None
-    for scope in SCOPES:
-        text, path = rules_text(scope, root, sid)
-        base = root if scope == "project" else None
-        rules, toggle = parse_rules(text, base)
-        if scope == "session":
-            session_toggle = toggle
-        layers.append({"scope": scope, "rules": rules, "path": path})
+    """Rules in force from `root`, plus the toggle and what decided it."""
+    session, session_toggle = load_layer("session", session_path(sid) if sid else None)
+    glob, _ = load_layer("global", GLOBAL_RULES)
 
     if session_toggle is not None:
         enabled, source = session_toggle, "this session"
     else:
         enabled, source = DEFAULT_ON, "the default"
 
-    return {"enabled": enabled, "source": source, "layers": layers}
-
-
-def under(path, root):
-    root = os.path.abspath(root).rstrip("/")
-    return path == root or path.startswith(root + "/")
+    return {
+        "enabled": enabled,
+        "source": source,
+        "session": session,
+        "global": glob,
+        "layers": [session, *project_layers(root), glob],
+    }
 
 
 def absolute(path, root):
@@ -269,16 +298,15 @@ def absolute(path, root):
 
 
 def decide(path, cfg, root):
-    """(reviewed, scope, rule) — the nearest scope matching this path wins."""
+    """(reviewed, layer, rule) — the nearest rules file matching this path wins."""
     if not path or not cfg["enabled"]:
         return False, None, None
     ap = absolute(path, root)
-    for layer in cfg["layers"]:
-        if layer["scope"] == "project" and not under(ap, root):
-            continue  # a repo's rules stop at its own tree
+    layers = [cfg["session"], *project_layers(os.path.dirname(ap)), cfg["global"]]
+    for layer in layers:
         hit = last_match(ap, layer["rules"])
         if hit:
-            return not hit.negated, layer["scope"], hit
+            return not hit.negated, layer, hit
     return False, None, None
 
 
@@ -314,7 +342,7 @@ def edit_hook(data):
     root = project_root(data)
     cfg = settings(root, session_id(data))
     for path in target_paths(data.get("tool_input")):
-        on, scope, rule = decide(path, cfg, root)
+        on, layer, rule = decide(path, cfg, root)
         if not on:
             continue
         print(
@@ -325,7 +353,7 @@ def edit_hook(data):
                         "permissionDecision": "ask",
                         "permissionDecisionReason": (
                             f"reviewguard is on and {os.path.basename(path)} is "
-                            f"reviewed by `{rule}` ({SCOPE_NAMES[scope]}). Show this "
+                            f"reviewed by `{rule}` ({layer_name(layer)}). Show this "
                             f"diff for approval. Rejecting ends the turn and skips "
                             f"any edits queued behind this one — reject with \"do "
                             f"the rest\" to keep them. Exempt this file with "
@@ -366,7 +394,7 @@ def rules_sentence(cfg):
             continue
         review = [str(r) for r in layer["rules"] if not r.negated]
         exempt = [r.pattern for r in layer["rules"] if r.negated]
-        part = f"{SCOPE_NAMES[layer['scope']]} — review {', '.join(review) or '(nothing)'}"
+        part = f"{layer_name(layer)} — review {', '.join(review) or '(nothing)'}"
         if exempt:
             part += f", except {', '.join(exempt)}"
         parts.append(part)
@@ -382,7 +410,7 @@ SESSION_COMMANDS = {
 
 def fast_path(data):
     """Run `/reviewguard ...` here, so the toggle lands without a model turn."""
-    m = re.match(r"^/?review[- ]?guard\b(.*)$", (data.get("prompt") or "").strip(), re.I)
+    m = re.match(r"^/review[- ]?guard\b(.*)$", (data.get("prompt") or "").strip(), re.I)
     if not m:
         return None
     try:
@@ -396,6 +424,7 @@ def fast_path(data):
     if not sid:
         return "reviewguard: no Claude Code session id; nothing changed"
 
+    sweep_sessions()
     out = io.StringIO()
     real, sys.stdout = sys.stdout, out
     try:
@@ -410,6 +439,9 @@ def fast_path(data):
 
 
 def prompt_hook(data):
+    sid = session_id(data)
+    if sid:
+        touch_session(sid)
     done = fast_path(data)
     if done is not None:
         # Blocking stops the prompt here: the result is shown and no model runs.
@@ -418,7 +450,7 @@ def prompt_hook(data):
 
     root = project_root(data)
     cfg = settings(root, session_id(data))
-    if not cfg["enabled"]:
+    if not cfg["enabled"] or not any(layer["rules"] for layer in cfg["layers"]):
         return
     print(
         json.dumps(
@@ -455,7 +487,6 @@ def set_toggle(path, on):
 
 def toggle(sid, on):
     set_toggle(session_path(sid), on)
-    sweep_sessions()
     print(f"reviewguard {'on' if on else 'off'} for this session")
 
 
@@ -465,7 +496,11 @@ def status(root, sid):
     print(f"reviewguard: {'ON' if cfg['enabled'] else 'OFF'}  (from {cfg['source']})")
     print("  rules, nearest scope first; the nearest one matching a path decides,")
     print("  and within a scope the last matching line wins:")
-    for layer in cfg["layers"]:
+    layers = cfg["layers"]
+    if len(layers) == 2:
+        missing = f"no {PROJECT_RULES} from {root} up"
+        layers = [layers[0], {"scope": "project", "rules": [], "path": missing}, layers[1]]
+    for layer in layers:
         name = SCOPE_NAMES[layer["scope"]]
         if not layer["rules"]:
             print(f"    {name:12s} (no rules)  {layer['path'] or ''}")
@@ -485,12 +520,12 @@ def check(paths, root, sid):
         print("(showing what would happen with it on)\n")
         cfg = {**cfg, "enabled": True}
     for path in paths:
-        on, scope, rule = decide(path, cfg, root)
+        on, layer, rule = decide(path, cfg, root)
         if rule is None:
             print(f"{path}: no review  (no line matches)")
         else:
             verdict = "REVIEW" if on else "no review"
-            print(f"{path}: {verdict}  ({SCOPE_NAMES[scope]}, line {rule.line}: {rule})")
+            print(f"{path}: {verdict}  ({layer_name(layer)}, line {rule.line}: {rule})")
 
 
 def edit_patterns(cmd, patterns, sid):

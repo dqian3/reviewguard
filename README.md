@@ -22,11 +22,20 @@ normal permission mode.
 *.tex
 README.md
 
-# Allow edits to the tmp dir. (! exempts a path)
-!/tmp
+# Allow edits under this repo's scratch/ dir. (! exempts a path)
+!/scratch/
 ```
 
-`~/.reviewguard/rules` can be used to set global rules.
+As with `.gitignore`, a `.reviewguard` can also go in a subdirectory, and one closer to a file takes priority. Each
+applies only to files under its own directory, and a leading `/` means that directory. In a git repo, files above the
+repo root are ignored. Rules for paths anywhere else go
+in `~/.reviewguard/rules`, where a leading `/` means the real filesystem root:
+
+```
+# Review .tex files everywhere, except under /tmp
+**/*.tex
+!/tmp/**
+```
 
 ### Session overrides
 

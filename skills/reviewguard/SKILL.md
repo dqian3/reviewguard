@@ -57,9 +57,12 @@ line exempts one. `#` comments and blank lines are ignored.
 Three scopes, nearest first:
 
 1. **session** — `~/.reviewguard/sessions/claude-<id>`, written by
-   `/reviewguard guard`/`allow`. Swept a week after its last change.
-2. **project** — `<repo>/.reviewguard`. These rules apply only to files inside
-   that tree.
+   `/reviewguard guard`/`allow`. Deleted once its session has been idle for a
+   week.
+2. **project** — every `.reviewguard` from the edited file's directory upward,
+   stopping at the repo root (the directory holding `.git`), home, or `/`. As
+   with `.gitignore`, each file applies only to files under its own directory,
+   and a deeper file takes priority over one above it.
 3. **global** — `~/.reviewguard/rules`, for rules that should hold everywhere.
 
 **Within a file, the last matching line wins**, as in `.gitignore`. **Across
