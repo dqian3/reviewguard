@@ -1,0 +1,30 @@
+{
+  "description": "reviewguard — reviewed files come back as a diff to approve; /reviewguard runs in the prompt hook",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "apply_patch|shell|local_shell|unified_exec",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/reviewguard.py\" --host codex edit-hook",
+            "timeout": 10,
+            "statusMessage": "reviewguard"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/reviewguard.py\" --host codex prompt-hook",
+            "timeout": 10,
+            "statusMessage": "reviewguard"
+          }
+        ]
+      }
+    ]
+  }
+}

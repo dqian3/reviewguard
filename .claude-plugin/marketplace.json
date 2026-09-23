@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "reviewguard",
+  "description": "reviewguard: ensures edits to chosen files are reviewed before they are written.",
+  "owner": {
+    "name": "Daniel Qian",
+    "email": "daniel.j.qian@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "reviewguard",
+      "description": "Ensures edits to chosen files are reviewed before they are written.",
+      "source": "./",
+      "category": "workflow"
+    }
+  ]
+}

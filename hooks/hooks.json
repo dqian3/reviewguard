@@ -1,0 +1,30 @@
+{
+  "description": "reviewguard — guarded file edits are asked about as a diff; /reviewguard runs in the prompt hook",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/reviewguard.py\" edit-hook",
+            "timeout": 10,
+            "statusMessage": "reviewguard"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/reviewguard.py\" prompt-hook",
+            "timeout": 10,
+            "statusMessage": "reviewguard"
+          }
+        ]
+      }
+    ]
+  }
+}
