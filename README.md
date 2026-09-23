@@ -1,34 +1,19 @@
 # reviewguard
 
-A small plugin for coding agents that ensures any edits to chosen files are reviewed, instead of writing
-them directly. Lets you use auto-mode for tasks such as writing and running tests, while keeping track of changes
-to important files.
-
-Supported coding agents:
-
-* Claude Code
-* OpenAI Codex
+A small plugin for Claude Code that ensures edits to chosen files are reviewed before they are written. Lets you use 
+auto-mode for tasks such as writing and running tests, while keeping track of changes to important files.
 
 ## Install
-
-Claude Code:
 
 ```
 /plugin marketplace add dqian3/reviewguard
 /plugin install reviewguard@reviewguard
 ```
 
-Codex:
-
-```
-codex plugin marketplace add dqian3/reviewguard
-codex plugin add reviewguard@reviewguard
-```
-
 ## Usage
 
-Add a `.reviewguard` file to your repo. Edits to any file it matches need your approval; everything else gets approved
-as usual.
+Add a `.reviewguard` file to your repo. Edits to any file it matches need your approval; everything else follows your
+normal permission mode.
 
 `.reviewguard` uses the same [syntax](https://git-scm.com/docs/gitignore) as `.gitignore`. For example:
 
@@ -37,7 +22,7 @@ as usual.
 *.tex
 README.md
 
-# Allow edits to the tmp dir. (! exempts a file)
+# Allow edits to the tmp dir. (! exempts a path)
 !/tmp
 ```
 
@@ -59,4 +44,5 @@ Session rules take priority over the repo's `.reviewguard`, which takes priority
 
 ## Caveats
 
-Agents can get around the guard by writing files through the shell (e.g. `sed -i`). The plugin tells the agent not to do this, but cannot enforce it.
+Agents can get around the guard by writing files through the shell (e.g. `sed -i`). The plugin tells the agent not to do
+this, but cannot enforce it.

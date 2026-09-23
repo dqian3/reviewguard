@@ -7,20 +7,17 @@ Review-mode makes changes to chosen files land as a diff you approve rather than
 a silent write. It is on by default; which files it covers is listed in rules
 files that read like `.gitignore`.
 
-It runs under Claude Code and Codex, which share a hook protocol. Two hooks,
-shipped by the plugin:
+It runs under Claude Code with two hooks shipped by the plugin:
 
 - **PreToolUse** on the edit tools returns `ask` for a reviewed path, so the
-  change is shown as a diff for approval. It names the line that decided. Under
-  Claude Code the tools are Edit / Write / MultiEdit / NotebookEdit; under Codex
-  it is `apply_patch`, whose file list is read out of the patch body — including
-  when the patch arrives as a heredoc inside a shell command.
+  change is shown as a diff for approval. It names the line that decided. The
+  covered tools are Edit / Write / MultiEdit / NotebookEdit.
 - **UserPromptSubmit** does two things: it runs `/reviewguard ...` itself and
   stops there (see below), and otherwise injects one line of context while
   reviewguard is on, telling the agent to make reviewed changes with the edit
   tools and not from the shell.
 
-Shell commands are not inspected, beyond reading a patch one carries. Blocking
+Shell commands are not inspected. Blocking
 rests on the agent reaching for the edit tools when asked to, which is the only
 part that ever produced reviewable diffs; guessing write targets out of command
 text was leaky in one direction and blocked ordinary commands in the other.
@@ -59,7 +56,7 @@ line exempts one. `#` comments and blank lines are ignored.
 
 Three scopes, nearest first:
 
-1. **session** — `~/.reviewguard/sessions/<host>-<id>`, written by
+1. **session** — `~/.reviewguard/sessions/claude-<id>`, written by
    `/reviewguard guard`/`allow`. Swept a week after its last change.
 2. **project** — `<repo>/.reviewguard`. These rules apply only to files inside
    that tree.

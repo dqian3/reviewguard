@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """reviewguard: make edits to chosen files land as a prompt, not a silent write.
 
-Runs under Claude Code and Codex, which share a hook protocol. Two hook entry
-points:
+Runs under Claude Code with two hook entry points:
 
     reviewguard.py edit-hook            # an edit tool is about to run -> ask
     reviewguard.py prompt-hook          # tell the agent to use the edit tools
-
-Either takes `--host claude` (default) or `--host codex`.
 
 The session commands are typed by the user as `/reviewguard ...` and run inside
 the prompt hook, never from a shell, so the agent cannot change them:
@@ -53,34 +50,8 @@ SCOPES = ("session", "project", "global")
 
 
 # --------------------------------------------------------------------------
-# hosts
-
-HOSTS = {
-    "claude": {
-        "name": "Claude Code",
-        "session_env": "CLAUDE_CODE_SESSION_ID",
-        "project_env": "CLAUDE_PROJECT_DIR",
-        "edit_tools": {"Edit", "Write", "MultiEdit", "NotebookEdit"},
-        "edit_with": "the Edit or Write tool",
-        "shell_tool": "Bash",
-    },
-    "codex": {
-        "name": "Codex",
-        "session_env": "CODEX_SESSION_ID",
-        "project_env": "CODEX_PROJECT_DIR",
-        # Codex edits through apply_patch, which also arrives as a shell
-        # heredoc; the patch body is read for paths either way.
-        "edit_tools": {"apply_patch", "shell", "local_shell", "unified_exec"},
-        "edit_with": "apply_patch",
-        "shell_tool": "shell",
-    },
-}
-
-HOST = "claude"
-
-
-def host():
-    return HOSTS[HOST]
+# Claude Code tools that write files directly.
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 
 # --------------------------------------------------------------------------
@@ -242,7 +213,7 @@ def last_match(path, rules):
 
 
 def project_root(hook_input=None):
-    root = os.environ.get(host()["project_env"]) or os.environ.get("CLAUDE_PROJECT_DIR")
+    root = os.environ.get("CLAUDE_PROJECT_DIR")
     if not root and hook_input:
         root = hook_input.get("cwd")
     return os.path.abspath(root or os.getcwd())
@@ -251,11 +222,11 @@ def project_root(hook_input=None):
 def session_id(payload=None):
     if payload and payload.get("session_id"):
         return str(payload["session_id"])
-    return os.environ.get(host()["session_env"]) or None
+    return os.environ.get("CLAUDE_CODE_SESSION_ID") or None
 
 
 def session_path(sid):
-    return os.path.join(SESSION_DIR, "%s-%s" % (HOST, sid))
+    return os.path.join(SESSION_DIR, "claude-%s" % sid)
 
 
 def sweep_sessions():
@@ -314,12 +285,6 @@ def decide(path, cfg, root):
 # --------------------------------------------------------------------------
 # what an edit is about to touch
 
-# apply_patch names its files in the patch body, whether it arrives as a tool
-# call of its own or as a heredoc inside a shell command.
-PATCH_PATHS = re.compile(
-    r"^\*\*\* (?:Add|Update|Delete) File:\s*(.+?)\s*$|^\*\*\* Move to:\s*(.+?)\s*$",
-    re.M,
-)
 PATH_KEYS = ("file_path", "notebook_path", "path")
 
 
@@ -331,18 +296,6 @@ def target_paths(tool_input):
             value = tool_input.get(key)
             if isinstance(value, str) and value:
                 paths.append(value)
-    if isinstance(tool_input, str):
-        blob = tool_input
-    else:
-        try:
-            blob = json.dumps(tool_input)
-        except Exception:
-            blob = str(tool_input)
-    # The patch body is a JSON string by the time it reaches us.
-    blob = blob.replace("\\n", "\n")
-    for m in PATCH_PATHS.finditer(blob):
-        paths.append((m.group(1) or m.group(2)).strip())
-
     seen, out = set(), []
     for p in paths:
         if p not in seen:
@@ -356,7 +309,7 @@ def target_paths(tool_input):
 
 
 def edit_hook(data):
-    if data.get("tool_name") not in host()["edit_tools"]:
+    if data.get("tool_name") not in EDIT_TOOLS:
         return
     root = project_root(data)
     cfg = settings(root, session_id(data))
@@ -385,14 +338,14 @@ def edit_hook(data):
         sys.exit(0)
 
 
-# Shell commands are not inspected, beyond reading a patch one carries. Asking
+# Shell commands are not inspected. Asking
 # the agent to reach for the edit tools is what keeps changes reviewable; a
 # scanner that guessed at write targets from command text was both leaky and
 # prone to blocking ordinary commands.
 GUIDANCE = (
     "reviewguard is on for this session. Make every change to a reviewed file "
-    "with {edit_with}, so it is shown as a diff for approval. Do not write "
-    "reviewed files from {shell_tool} — no `>`/`>>` redirects, `sed -i`, "
+    "with the Edit or Write tool, so it is shown as a diff for approval. Do not write "
+    "reviewed files from Bash — no `>`/`>>` redirects, `sed -i`, "
     "`perl -pi`, `tee`, `cp`/`mv` over one, or a script that opens one for "
     "writing. Reading them with cat/grep/sed -n is fine, and so is git. "
     "Send reviewed edits one per turn and keep each one small: several in one "
@@ -441,7 +394,7 @@ def fast_path(data):
 
     sid = session_id(data)
     if not sid:
-        return f"reviewguard: no {host()['name']} session id; nothing changed"
+        return "reviewguard: no Claude Code session id; nothing changed"
 
     out = io.StringIO()
     real, sys.stdout = sys.stdout, out
@@ -472,11 +425,7 @@ def prompt_hook(data):
             {
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
-                    "additionalContext": GUIDANCE.format(
-                        edit_with=host()["edit_with"],
-                        shell_tool=host()["shell_tool"],
-                        rules=rules_sentence(cfg),
-                    ),
+                    "additionalContext": GUIDANCE.format(rules=rules_sentence(cfg)),
                 }
             }
         )
@@ -629,14 +578,7 @@ ENTRY_POINTS = {
 
 
 def main():
-    global HOST
     argv = sys.argv[1:]
-    if "--host" in argv:
-        i = argv.index("--host")
-        if i + 1 < len(argv) and argv[i + 1] in HOSTS:
-            HOST = argv[i + 1]
-        del argv[i : i + 2]
-
     if not argv or argv[0] not in ENTRY_POINTS:
         print(__doc__)
         sys.exit(1)
